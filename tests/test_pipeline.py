@@ -8,9 +8,10 @@ class FakeSchemaReader:
 
 
 class FakeSQLGenerator:
-    def generate(self, question: str, schema: str) -> str:
+    def generate(self, question: str, schema: str, history=()) -> str:
         assert question == "Qual o total?"
         assert "vw_vendas" in schema
+        assert history == ()
         return "SELECT SUM(total) AS total FROM public.vw_vendas"
 
 
@@ -27,8 +28,9 @@ class FakeExecutor:
 
 
 class FakeAnswerGenerator:
-    def generate(self, question, sql, columns, rows) -> str:
+    def generate(self, question, sql, columns, rows, history=()) -> str:
         assert rows == [{"total": 123.45}]
+        assert history == ()
         return "O total e R$ 123,45."
 
 
@@ -46,4 +48,3 @@ def test_pipeline_orchestrates_all_steps() -> None:
     assert result.answer == "O total e R$ 123,45."
     assert result.columns == ["total"]
     assert result.executed_sql.endswith("LIMIT 100")
-

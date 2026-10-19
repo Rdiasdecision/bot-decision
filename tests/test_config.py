@@ -38,3 +38,30 @@ def test_database_url_can_replace_separate_credentials() -> None:
 def test_rejects_incomplete_database_credentials() -> None:
     with pytest.raises(ValidationError, match="DB_NAME.*DB_PASSWORD"):
         Settings(**BASE, _env_file=None)
+
+
+def test_maps_each_screen_to_its_views() -> None:
+    settings = Settings(
+        **{**BASE, "allowed_views": "public.vw_vendas,crm.vw_clientes"},
+        screen_views={
+            "vendas": ["public.vw_vendas"],
+            "clientes": ["crm.vw_clientes"],
+        },
+        database_url="postgresql://reader:secret@db:5432/financeiro",
+        _env_file=None,
+    )
+
+    assert settings.views_by_screen == {
+        "vendas": ("public.vw_vendas",),
+        "clientes": ("crm.vw_clientes",),
+    }
+
+
+def test_rejects_screen_view_outside_global_allowlist() -> None:
+    with pytest.raises(ValidationError, match="ausentes de ALLOWED_VIEWS"):
+        Settings(
+            **BASE,
+            screen_views={"admin": ["private.usuarios"]},
+            database_url="postgresql://reader:secret@db:5432/financeiro",
+            _env_file=None,
+        )

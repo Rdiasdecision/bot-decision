@@ -19,7 +19,7 @@ barreira de seguranca principal; nao use uma conta administrativa na aplicacao.
 
 ## Requisitos
 
-- Python 3.10 ou superior
+- Python 3.11 ou superior recomendado (Python 3.10 chegou ao fim do suporte)
 - PostgreSQL acessivel pela aplicacao
 - Chave da API Maritaca
 - Views de consulta ja criadas no banco
@@ -46,8 +46,18 @@ psql -U postgres -d seu_banco \
 
 Depois configure `.env` com `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`,
 `DB_PASSWORD` e `DB_SSLMODE`. Como alternativa, defina `DATABASE_URL`; ela tem
-prioridade sobre os campos separados. `ALLOWED_VIEWS` deve conter exatamente o
-conjunto liberado para o role, sempre no formato `schema.view`.
+prioridade sobre os campos separados. `ALLOWED_VIEWS` e a barreira global e deve
+conter exatamente o conjunto liberado para o role, sempre em `schema.view`.
+
+Associe cada tela a um subconjunto dessa allowlist usando JSON:
+
+```env
+ALLOWED_VIEWS=public.vw_vendas,public.vw_clientes
+SCREEN_VIEWS={"vendas":["public.vw_vendas"],"clientes":["public.vw_clientes"]}
+```
+
+Uma consulta feita com `screen=vendas` nao consegue acessar a view da tela
+`clientes`, pois recebe schema e validador proprios.
 
 ## Executar
 
@@ -73,20 +83,87 @@ Envie uma pergunta:
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
   -H 'Content-Type: application/json' \
-  -d '{"question":"Quantos registros existem?"}'
+  -d '{"user_id":"usuario-123","screen":"vendas","session_id":"conversa-1","question":"Quantos registros existem?"}'
 ```
 
-A resposta inclui `answer`, o `generated_sql` original, o `sql` validado e
-efetivamente executado, as `columns` e as `rows`. Endpoints disponíveis:
+A resposta inclui `user_id`, `screen`, `session_id`, `answer`, o `generated_sql`
+original, o `sql` validado e efetivamente executado, as `columns`, as `rows` e a
+quantidade de mensagens na janela. Reutilize as mesmas tags nas perguntas
+seguintes. Se `session_id` for omitido, a API cria um UUID e o devolve.
+
+Por padrao, as ultimas 8 mensagens ficam em memoria. Configure com
+`CONVERSATION_WINDOW_MESSAGES`; `MAX_CONVERSATION_SESSIONS` limita quantas
+sessoes sao mantidas por processo. Esse historico e temporario e desaparece ao
+reiniciar a API.
+
+Endpoints disponíveis:
 
 - `POST /chat`: executa o pipeline completo;
+- `DELETE /users/{user_id}/screens/{screen}/sessions/{session_id}`: limpa uma conversa;
 - `GET /health`: verifica a conexao com o PostgreSQL;
 - `GET /docs`: documentacao Swagger interativa;
 - `GET /openapi.json`: contrato OpenAPI.
 
 O comando acima publica apenas em `127.0.0.1`. Antes de expor a API em rede,
 adicione autenticacao, TLS, rate limiting e controles de acesso adequados aos
-dados consultados.
+dados consultados. `user_id` e `screen` sao tags fornecidas pelo cliente e nao
+provam identidade nem autorizacao; em producao, derive ambas de uma sessao ou
+token autenticado, em vez de confiar diretamente no corpo da requisicao.
+
+## Azure Functions
+
+O arquivo `function_app.py` adapta a mesma FastAPI ao modelo Python v2 do Azure
+Functions. Nao existe uma segunda implementacao dos endpoints: Azure e Uvicorn
+usam o mesmo objeto `app.api:app`.
+
+Arquivos do empacotamento:
+
+- `function_app.py`: entrada descoberta pelo runtime Python v2;
+- `host.json`: runtime v4, sem prefixo adicional para preservar as mesmas rotas;
+- `local.settings.json.example`: modelo para execucao com Core Tools;
+- `.funcignore`: impede o envio de segredos, testes e ambientes virtuais.
+
+Para testar como FastAPI offline:
+
+```bash
+uvicorn app.api:app --host 127.0.0.1 --port 8000
+```
+
+Nesse modo, use `http://127.0.0.1:8000/chat` e `/docs`.
+
+Para testar com o runtime do Azure Functions, instale o Azure Functions Core
+Tools, copie o modelo local e preencha as credenciais somente no arquivo local:
+
+```bash
+cp local.settings.json.example local.settings.json
+func start
+```
+
+O valor `UseDevelopmentStorage=true` pressupoe que o Azurite esteja em
+execucao. Como alternativa, informe uma conexao valida em `AzureWebJobsStorage`.
+
+Nesse modo, as rotas permanecem iguais às usadas pelo Uvicorn:
+
+```text
+http://localhost:7071/chat
+http://localhost:7071/health
+http://localhost:7071/docs
+```
+
+Para publicar em uma Function App Python ja criada:
+
+```bash
+func azure functionapp publish NOME_DA_FUNCTION_APP --python
+```
+
+Cadastre todas as variaveis de `local.settings.json.example` como Application
+Settings da Function App. Nao publique `.env` nem `local.settings.json`. No
+Azure, `AuthLevel.FUNCTION` exige uma Function Key (`?code=...` ou header
+`x-functions-key`) para chamar os endpoints.
+
+Observacao: a memoria de conversa continua em RAM. Em Azure Functions, um cold
+start ou escalonamento para outra instancia perde/separa esse historico. Para
+memoria consistente em producao, substitua-a por Redis ou PostgreSQL.
 
 ## Testes
 
@@ -135,6 +212,7 @@ chatbot-sql/
 ## Limites conhecidos do prototipo
 
 - O contexto de schema e mantido em memoria; use `/schema` apos alterar views.
+- A janela de conversa e local a cada processo e nao persiste reinicializacoes.
 - Os resultados retornados (ate `MAX_ROWS`) sao enviados a Maritaca. Avalie
   requisitos de privacidade antes de expor dados sensiveis.
 - SQL gerado por LLM nunca deve ser considerado confiavel. Preserve todas as

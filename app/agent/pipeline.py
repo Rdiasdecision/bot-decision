@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from app.agent.answer_generator import AnswerGenerator
+from app.agent.memory import ConversationMessage
 from app.agent.sql_generator import SQLGenerator
 from app.agent.sql_validator import SQLValidator
 from app.db.executor import QueryExecutor
@@ -41,9 +42,13 @@ class ChatbotPipeline:
         self._schema_cache = self._schema_reader.describe()
         return self._schema_cache
 
-    def ask(self, question: str) -> PipelineResult:
+    def ask(
+        self,
+        question: str,
+        history: tuple[ConversationMessage, ...] = (),
+    ) -> PipelineResult:
         schema = self._schema_cache or self.refresh_schema()
-        generated_sql = self._sql_generator.generate(question, schema)
+        generated_sql = self._sql_generator.generate(question, schema, history)
         executed_sql = self._sql_validator.validate_and_rewrite(generated_sql)
         query_result = self._executor.execute(executed_sql)
         answer = self._answer_generator.generate(
@@ -51,6 +56,7 @@ class ChatbotPipeline:
             executed_sql,
             query_result.columns,
             query_result.rows,
+            history,
         )
         return PipelineResult(
             answer=answer,
@@ -59,4 +65,3 @@ class ChatbotPipeline:
             columns=query_result.columns,
             rows=query_result.rows,
         )
-
